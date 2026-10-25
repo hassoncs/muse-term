@@ -9,7 +9,7 @@ agent once you're done:
 
 | Transport | You get | Costs | Owner acts |
 |---|---|---|---|
-| **Tailscale + SSH** ⭐ recommended | Real TTY, live streaming, `scp`, Apple's own sshd, WireGuard encryption | A free Tailscale account | ~3: install Tailscale, sign in, turn on Remote Login |
+| **Tailscale + SSH** ⭐ recommended | Real TTY, live streaming, `scp`, Apple's own sshd, WireGuard encryption | A free Tailscale account | 4, all one-time: install Tailscale + sign in, turn on Remote Login, switch Muse's ssh permission from Deny to Ask, approve your agent's VM into your tailnet |
 | **File-drop daemon** (in this repo) | Shell via job files — streaming progress + PTY sessions included | No accounts, no network at all | 1: paste one install line |
 | Hosted relay / ngrok-style tunnel | — | *Not shipped:* extra account + a third party to trust, rotating URLs | — |
 

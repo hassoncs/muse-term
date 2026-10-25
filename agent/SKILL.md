@@ -15,8 +15,14 @@ description: Get a shell on the owner's Mac. Flagship: Tailscale + SSH (agent-gu
    pubkey, write back. Add ssh stanza with
    `ProxyCommand socat - PROXY:<HTTPS_PROXY host>:%h:%p,proxyport=3130`.
 4. Gate: `ssh mac-ts 'hostname; whoami'` and `ssh -tt mac-ts 'tty'`
-   must both succeed. Failure ladder (join pending → Remote Login →
-   authorized_keys/modes) is in ../AGENT.md.
+   must both succeed. Failure ladder (Muse's own outbound-SSH
+   permission → join pending → Remote Login → authorized_keys/modes)
+   is in ../AGENT.md.
+   If `ssh` refuses with "Outbound SSH is turned off for this
+   assistant" — a Muse app gate, not a Mac problem — STOP and ask the
+   owner to switch **ssh** from Deny to Ask (or Allow) in Muse
+   Settings → Permissions → Direct network protocols, then retry.
+   This is owner act #3.
 5. Daily use: plain `ssh`/`scp`; servers via `nohup … &` + curl checks.
 
 ## Fallback: file-drop (zero accounts)

@@ -5,7 +5,7 @@ read/write files on that Mac (`files.*`), and you have a shell on your
 **own** computer (a VM) — but stock, you have **no shell on the Mac**.
 This package fixes that, two ways:
 
-- **Flagship: Tailscale + SSH.** Real TTY, streaming, `scp`. ~3 owner acts.
+- **Flagship: Tailscale + SSH.** Real TTY, streaming, `scp`. ~4 owner acts.
 - **Fallback: file-drop daemon.** Zero accounts, one paste; poll latency,
   streaming + emulated PTY. If SSH setup fails at any gate, land here so
   the owner is never left with nothing.
@@ -27,7 +27,20 @@ has a private *tailnet* address.
 **System Settings → General → Sharing → Remote Login** and turn it **ON**
 (allowing their own user). This starts Apple's built-in SSH server.
 *Gate: can't be verified until the Phase C proof — a refusal there sends
-you back here first (see Failure ladder).*
+you to the Failure ladder (check Muse's own ssh permission first).*
+
+## Phase B-pre — your own outbound-SSH permission (check before the proof)
+
+If an `ssh` attempt is refused with a banner like *"Outbound SSH is
+turned off for this assistant. To allow it, ask the user to open Muse
+settings -> Permissions -> Direct network protocols and switch ssh from
+Deny to Ask"* — **STOP. This is a Muse app permission, not a Mac
+problem.** Nothing on the Mac side is wrong and no Mac-side fix exists.
+Ask the owner to open **Muse Settings → Permissions → Direct network
+protocols** and switch **ssh** from **Deny** to **Ask** (or Allow),
+then retry. **This is owner act #3** — count it in the human-acts list.
+Expect it to surface at the Phase C proof; check for it there first
+before diagnosing the Mac (see Failure ladder, item 1).
 
 ## Phase B — join your VM to the owner's tailnet (you do this)
 
@@ -105,18 +118,24 @@ session open waiting on a dev server.
 
 ## Failure ladder — diagnose in this order, then fall back
 
-1. **Proxy/connect timeout** → your VM's tailnet join still pending?
+1. **`ssh` refuses with "Outbound SSH is turned off for this
+   assistant"** — especially when the banner fetch through the proxy
+   succeeded but `ssh` itself refuses → this is Muse's own permission
+   gate, not the Mac. Owner act #3: Muse Settings → Permissions →
+   Direct network protocols → **ssh**: Deny → Ask (or Allow). Retry.
+   Check this **first** whenever the Mac-side checks pass.
+2. **Proxy/connect timeout** → your VM's tailnet join still pending?
    `/opt/hatch/bin/tailscale status`; re-show the approval link (Phase B).
-2. **Connection reaches the Mac but port 22 refuses/closes** → Remote
+3. **Connection reaches the Mac but port 22 refuses/closes** → Remote
    Login is off. Back to Phase A2.
-3. **`Permission denied (publickey)`** → check `authorized_keys` content
+4. **`Permission denied (publickey)`** → check `authorized_keys` content
    via `files.read` (your exact pubkey line present? existing lines
    intact?). If content is right, it's modes — ask the owner to run one
    Terminal line: `chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`,
    then retry.
-4. **Host-key / changed-key warnings** → stop; show the owner, don't
+5. **Host-key / changed-key warnings** → stop; show the owner, don't
    delete `known_hosts` entries silently.
-5. **Still stuck → install the file-drop fallback below.** The owner is
+6. **Still stuck → install the file-drop fallback below.** The owner is
    never left with nothing, and file-drop needs no network at all. SSH
    can be revisited later; both can coexist.
 
