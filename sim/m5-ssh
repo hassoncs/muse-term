@@ -1,37 +1,86 @@
 #!/bin/sh
-# m5-ssh — real SSH to Chris's M5 Mac via the serveo reverse tunnel.
+# m5-ssh — real SSH to a Mac via a serveo reverse tunnel (muse-term
+# Transport 1b). Generic: every site-specific value comes from the
+# environment; nothing is hardcoded to a person, host, or account.
 #
-# Mac side (already installed, launchd KeepAlive):
-#   user agent io.museterm.revtunnel.test runs
+# Mac side: a launchd user agent (see ../mac/revtunnel.plist) runs
 #   /usr/bin/ssh -N -R 0:localhost:22 serveo.net
-#   Serveo anonymous tier assigns a RANDOM port per (re)connect and the
-#   tunnel expires after ~10 min / 2 min idle — launchd respawns it, so
-#   the port ROTATES. This wrapper reads the current port from the Mac
-#   log (via the MuseExec channel) on every invocation.
+# Serveo's anonymous tier assigns a RANDOM port per (re)connect and
+# tunnels expire — launchd respawns it, so the port ROTATES. This
+# wrapper reads the current port from the tunnel log on the Mac (via
+# your exec channel to the Mac) on every invocation, unless you pass
+# the port in directly.
+#
+# Environment:
+#   MAC_USER            Mac login user. Default: $USER (set it — your
+#                       agent-VM user is usually NOT your Mac user).
+#   MUSETERM_KEY        SSH private key. Default: $HOME/.ssh/id_ed25519
+#   MUSETERM_PORT       Current tunnel port, if known. Skips lookup.
+#   MUSETERM_LOG        Tunnel log path ON THE MAC.
+#                       Default: /tmp/revtunnel.log
+#   MUSETERM_CHANNEL    Command that runs one shell command ON THE MAC
+#                       and prints its stdout (the command is appended
+#                       as a single argument). Used only for the port
+#                       lookup. E.g. a MuseExec-style client:
+#                         MUSETERM_CHANNEL="python3 /path/to/mx.py run"
+#   HTTPS_PROXY         Your runtime proxy URL. Its host is reused for
+#                       the CONNECT proxy; the port is replaced with
+#                       MUSETERM_PROXY_PORT (default 3128). Set
+#                       MUSETERM_NO_PROXY=1 if your VM can dial the
+#                       tunnel endpoint directly.
+#   M5_SSH_DRY_RUN=1    Print the command instead of running it.
 #
 # Usage:
-#   m5-ssh                     interactive shell (PTY via `script` is NOT
-#                              automatic; serveo gateway refuses ssh -tt.
-#                              For a PTY command: m5-ssh 'script -q /dev/null <cmd>')
+#   m5-ssh                     interactive shell
 #   m5-ssh '<cmd>'             run a command on the Mac
 #   m5-ssh --scp <local> <remote-path>   scp upload (same tunnel)
-#
-# Requirements: mx.py (MuseExec v2) reachable, socat on the VM.
 set -eu
-MAC_USER=hassoncs
+
+MODE=ssh
+if [ "${1:-}" = "--scp" ]; then MODE=scp; shift; fi
+
+MAC_USER=${MAC_USER:-${USER:-}}
+[ -n "$MAC_USER" ] || { echo "m5-ssh: set MAC_USER to the Mac login user" >&2; exit 1; }
 TUNNEL_HOST=serveousercontent.com
-KEY=/home/hatch/.ssh/id_ed25519
-PROXYCMD='socat - PROXY:hatch-egress-proxy:%h:%p,proxyport=3128'
+KEY=${MUSETERM_KEY:-$HOME/.ssh/id_ed25519}
+LOG=${MUSETERM_LOG:-/tmp/revtunnel.log}
 
-PORT=$(timeout 120 python3 "$HOME/workspace/mac-exec/v2/mx.py" run \
-  'grep "Allocated port" /tmp/revtunnel-launchd.log | tail -1' \
-  | sed -n 's/.*Allocated port \([0-9][0-9]*\).*/\1/p' | tail -1)
-[ -n "$PORT" ] || { echo "m5-ssh: could not read serveo port from Mac log" >&2; exit 1; }
-
-if [ "${1:-}" = "--scp" ]; then
-  shift
-  exec scp -P "$PORT" -i "$KEY" -o "ProxyCommand=$PROXYCMD" \
-    -o StrictHostKeyChecking=accept-new "$1" "$MAC_USER@$TUNNEL_HOST:$2"
+PROXYCMD=
+if [ "${MUSETERM_NO_PROXY:-}" != "1" ]; then
+  PROXY_HOST=$(printf '%s' "${HTTPS_PROXY:-}" | sed -E 's#^[a-zA-Z]+://([^@/]+@)?([^:/]+).*#\2#')
+  [ -n "$PROXY_HOST" ] || { echo "m5-ssh: cannot parse proxy host from \$HTTPS_PROXY (set MUSETERM_NO_PROXY=1 for a direct route)" >&2; exit 1; }
+  PROXYCMD="socat - PROXY:$PROXY_HOST:%h:%p,proxyport=${MUSETERM_PROXY_PORT:-3128}"
 fi
-exec ssh -p "$PORT" -i "$KEY" -o "ProxyCommand=$PROXYCMD" \
-  -o StrictHostKeyChecking=accept-new "$MAC_USER@$TUNNEL_HOST" "$@"
+
+PORT=${MUSETERM_PORT:-}
+if [ -z "$PORT" ]; then
+  [ -n "${MUSETERM_CHANNEL:-}" ] || { echo "m5-ssh: set MUSETERM_PORT, or MUSETERM_CHANNEL (a command that runs a shell command on the Mac) so the current port can be read from $LOG" >&2; exit 1; }
+  # shellcheck disable=SC2086
+  PORT=$($MUSETERM_CHANNEL "grep 'Allocated port' $LOG | tail -1" \
+    | sed -n 's/.*Allocated port \([0-9][0-9]*\).*/\1/p' | tail -1)
+fi
+[ -n "$PORT" ] || { echo "m5-ssh: could not read serveo port from Mac log ($LOG)" >&2; exit 1; }
+
+if [ "${M5_SSH_DRY_RUN:-}" = "1" ]; then
+  echo "mode=$MODE port=$PORT key=$KEY user=$MAC_USER host=$TUNNEL_HOST proxycmd=${PROXYCMD:-<none>} args: $*"
+  exit 0
+fi
+
+if [ "$MODE" = scp ]; then
+  SRC=$1; DST=$2; shift 2
+  if [ -n "$PROXYCMD" ]; then
+    exec scp -P "$PORT" -i "$KEY" -o StrictHostKeyChecking=accept-new \
+      -o "ProxyCommand=$PROXYCMD" "$SRC" "$MAC_USER@$TUNNEL_HOST:$DST"
+  else
+    exec scp -P "$PORT" -i "$KEY" -o StrictHostKeyChecking=accept-new \
+      "$SRC" "$MAC_USER@$TUNNEL_HOST:$DST"
+  fi
+fi
+
+if [ -n "$PROXYCMD" ]; then
+  exec ssh -p "$PORT" -i "$KEY" -o StrictHostKeyChecking=accept-new \
+    -o "ProxyCommand=$PROXYCMD" "$MAC_USER@$TUNNEL_HOST" "$@"
+else
+  exec ssh -p "$PORT" -i "$KEY" -o StrictHostKeyChecking=accept-new \
+    "$MAC_USER@$TUNNEL_HOST" "$@"
+fi

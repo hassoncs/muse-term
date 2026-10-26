@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
-"""m5sh — simulated ssh: a persistent interactive shell on Chris's Mac.
+"""m5sh — simulated ssh: a persistent interactive shell on a Mac.
 
-NOT real ssh. A guaranteed-floor ssh-LIKE shell layered on the already-working
-MuseExec v2 channel (~/workspace/mac-exec/v2/mx.py) + a dedicated tmux
-session named `m5sh` on the Mac (/opt/homebrew/bin/tmux, shell: /bin/zsh -i).
-No new network dependency.
+NOT real ssh. A guaranteed-floor ssh-LIKE shell layered on any exec
+channel that can run a shell command on the Mac (see M5SH_CHANNEL
+below) + a dedicated tmux session named `m5sh` on the Mac (tmux,
+shell: /bin/zsh -i). No new network dependency beyond the channel.
+
+Channel setup — REQUIRED, nothing is hardcoded:
+  M5SH_CHANNEL   Command that runs one shell command on the Mac and
+                 prints its stdout; the command is appended as a
+                 single argument. Two known-good shapes:
+                   * a MuseExec-compatible client, e.g.
+                     M5SH_CHANNEL="python3 /path/to/mx.py run"
+                   * this package's own file-drop session mode: any
+                     wrapper that submits a job to the file-drop
+                     daemon and prints the result works the same way.
+  M5SH_TMUX      tmux binary on the Mac.
+                 Default: /opt/homebrew/bin/tmux
 
 Usage:
   m5sh run '<cmd>' [--timeout SEC] [--show-exit]
@@ -43,8 +55,8 @@ How it works / completion detection (robust, prompt-independent):
   not depend on it).
 
 Known limits (honest):
-  * Latency: every subcommand costs one MuseExec round-trip, measured
-    1.5-4.7s per call on this link (2026-10-25; varies with daemon load).
+  * Latency: every subcommand costs one channel round-trip (measured
+    1.5-4.7s per call on the reference setup; varies with channel load).
     `run` of a long command adds its own runtime. This is a floor, not
     interactive-grade ssh latency.
   * No port forwarding, no scp/sftp, no agent forwarding — it is a shell
@@ -62,15 +74,27 @@ Known limits (honest):
   * Commands are single-pane serial: concurrent m5sh runs race the prompt.
 """
 import base64
+import os
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 
-MX = ["timeout", "130", "python3",
-      "/home/hatch/workspace/mac-exec/v2/mx.py", "run"]
-TMUX = "/opt/homebrew/bin/tmux"
+TMUX = os.environ.get("M5SH_TMUX", "/opt/homebrew/bin/tmux")
 SESSION = "m5sh"
+
+
+def channel_cmd():
+    raw = os.environ.get("M5SH_CHANNEL", "").strip()
+    if not raw:
+        print("m5sh: set M5SH_CHANNEL to a command that runs one shell "
+              "command on the Mac and prints its stdout (e.g. a "
+              "MuseExec-compatible client, or a wrapper around this "
+              "package's file-drop session mode). See --help.",
+              file=sys.stderr)
+        sys.exit(2)
+    return shlex.split(raw)
 
 ENSURE = r"""
 if ! $TMUXBIN has-session -t $SESS 2>/dev/null; then
@@ -85,7 +109,7 @@ fi
 
 
 def mx(remote: str, timeout_s: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(MX + [remote, "--timeout", str(timeout_s)],
+    return subprocess.run(channel_cmd() + [remote],
                           capture_output=True, text=True,
                           timeout=timeout_s + 30)
 

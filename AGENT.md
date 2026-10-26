@@ -205,11 +205,12 @@ ProxyCommand to each command.*
 Everything is ordinary `ssh` / `scp` from your VM. Examples:
 
 ```sh
-ssh mac-ts 'cd ~/Workspaces && git clone https://github.com/imsvidskiy/dawnfolk.git'
-ssh mac-ts 'cd ~/Workspaces/dawnfolk && bun install'
-ssh mac-ts 'cd ~/Workspaces/dawnfolk && nohup bun run dev > /tmp/dev.log 2>&1 &'
-ssh mac-ts 'curl -s -o /dev/null -w "%{http_code}" http://localhost:5173'   # expect 200
-scp mac-ts:~/Workspaces/dawnfolk/package.json ./   # files both ways
+ssh mac-ts 'hostname && whoami && sw_vers -productVersion'          # run a command remotely
+ssh mac-ts 'mkdir -p ~/scratch-demo && echo hello-from-the-mac > ~/scratch-demo/hello.txt'
+ssh mac-ts 'cd ~/scratch-demo && nohup python3 -m http.server 8901 > /tmp/http-demo.log 2>&1 &'
+ssh mac-ts 'curl -s http://localhost:8901/hello.txt'                # serves the file just written
+scp mac-ts:~/scratch-demo/hello.txt ./                              # download
+scp hello.txt mac-ts:~/scratch-demo/hello-copy.txt                 # upload back
 ```
 
 Long or interactive work: `ssh -tt` gives a real terminal. Background

@@ -33,7 +33,7 @@ own SSH public key into `~/.ssh/authorized_keys` on your Mac **using the
 file access it already has**, and from then on it's just:
 
 ```sh
-ssh mac-ts 'cd ~/Workspaces && git clone … && bun install && bun run dev'
+ssh mac-ts 'cd ~/any/project && git pull && make test'
 ```
 
 No daemon to write, nothing custom running on your Mac — the server is
