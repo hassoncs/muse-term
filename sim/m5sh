@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""m5sh — simulated ssh: a persistent interactive shell on Chris's Mac.
+
+NOT real ssh. A guaranteed-floor ssh-LIKE shell layered on the already-working
+MuseExec v2 channel (~/workspace/mac-exec/v2/mx.py) + a dedicated tmux
+session named `m5sh` on the Mac (/opt/homebrew/bin/tmux, shell: /bin/zsh -i).
+No new network dependency.
+
+Usage:
+  m5sh run '<cmd>' [--timeout SEC] [--show-exit]
+                  Run <cmd> in the persistent pane. cwd/env/vars persist
+                  across calls (the command is `eval`ed in the pane's zsh).
+                  Stdout = exactly the command's stdout+stderr. This
+                  process's exit code = the remote command's exit code.
+                  --show-exit also prints "[exit N]" to stderr.
+                  Default timeout 90s; on timeout exit 124, the command
+                  keeps running in the pane (see `m5sh read` / `key C-c`).
+  m5sh type '<text>' [--enter]
+                  Send literal text to the pane (for interactive programs:
+                  REPLs, bc, prompts). No Enter is sent unless --enter.
+                  Literal backslash escapes in <text> are NOT interpreted.
+  m5sh key <tmux-key> [more keys...]
+                  Send tmux key names, e.g. `m5sh key Enter`, `m5sh key C-c`.
+  m5sh read       Print the current pane capture (plain text, last 300 lines).
+  m5sh kill       Kill the tmux session on the Mac.
+  m5sh status     Say whether the session exists.
+
+How it works / completion detection (robust, prompt-independent):
+  Each `run` gets a random nonce. The user command is base64-encoded on the
+  VM and decoded to /tmp/m5sh-<nonce>.cmd on the Mac — user text NEVER enters
+  a shell command line, so quoting of the user command is a non-issue at
+  every layer (local argv -> mx JSON -> remote zsh -> tmux). The pane is
+  then sent one fixed, nonce-only line:
+
+      eval "$(cat /tmp/m5sh-<nonce>.cmd)" >/tmp/m5sh-<nonce>.out 2>&1; \
+          echo __M5SH_DONE_<nonce>__:$? >/tmp/m5sh-<nonce>.done
+
+  The SAME mx call then waits server-side (on the Mac) for the .done file,
+  and returns its sentinel line + the .out file. Output comes from the file,
+  not from scraping the pane, so there is no prompt/echo/ANSI noise in `run`
+  output. The session is auto-created on first use (200x50, PS1 set to a
+  unique marker `__M5SH__%# ` — cosmetic/readability only; detection does
+  not depend on it).
+
+Known limits (honest):
+  * Latency: every subcommand costs one MuseExec round-trip, measured
+    1.5-4.7s per call on this link (2026-10-25; varies with daemon load).
+    `run` of a long command adds its own runtime. This is a floor, not
+    interactive-grade ssh latency.
+  * No port forwarding, no scp/sftp, no agent forwarding — it is a shell
+    only. Move files with base64 through `run` if you must.
+  * Pane is fixed 200x50 (resize: tmux resize-window on the Mac).
+  * `run` assumes the pane is sitting at a shell prompt. If an interactive
+    program owns the pane, use type/key/read instead; a `run` line would
+    be fed to that program and time out.
+  * A command that replaces/kills the shell (exec, exit, kill) never writes
+    the sentinel -> `run` times out and the session is gone/recreated next
+    call (state lost).
+  * `read` is a pane scrape: it includes prompts/echoes and anything an
+    interactive program drew (some ANSI/full-screen redraw noise possible);
+    tmux capture is requested without escape sequences.
+  * Commands are single-pane serial: concurrent m5sh runs race the prompt.
+"""
+import base64
+import re
+import secrets
+import subprocess
+import sys
+
+MX = ["timeout", "130", "python3",
+      "/home/hatch/workspace/mac-exec/v2/mx.py", "run"]
+TMUX = "/opt/homebrew/bin/tmux"
+SESSION = "m5sh"
+
+ENSURE = r"""
+if ! $TMUXBIN has-session -t $SESS 2>/dev/null; then
+  $TMUXBIN new-session -d -s $SESS -x 200 -y 50 '/bin/zsh -i'
+  $TMUXBIN set-option -t $SESS history-limit 100000 >/dev/null 2>&1
+  sleep 1.5
+  $TMUXBIN send-keys -t $SESS -l -- "PS1='__M5SH__%# '"
+  $TMUXBIN send-keys -t $SESS Enter
+  sleep 0.3
+fi
+""".replace("$TMUXBIN", TMUX).replace("$SESS", SESSION)
+
+
+def mx(remote: str, timeout_s: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(MX + [remote, "--timeout", str(timeout_s)],
+                          capture_output=True, text=True,
+                          timeout=timeout_s + 30)
+
+
+def fail(msg: str, code: int = 2):
+    print(f"m5sh: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def cmd_run(argv):
+    timeout_s, show_exit, parts = 90, False, []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--timeout":
+            timeout_s = int(argv[i + 1]); i += 2
+        elif argv[i] == "--show-exit":
+            show_exit = True; i += 1
+        else:
+            parts.append(argv[i]); i += 1
+    if len(parts) != 1:
+        fail("run needs exactly one quoted command argument")
+    nonce = secrets.token_hex(6)
+    b64 = base64.b64encode(parts[0].encode()).decode()
+    cmd_f, out_f, done_f = (f"/tmp/m5sh-{nonce}.cmd", f"/tmp/m5sh-{nonce}.out",
+                            f"/tmp/m5sh-{nonce}.done")
+    wait_iters = max(1, timeout_s * 2)  # 0.5s sleeps server-side
+    remote = f"""
+setopt NO_GLOB 2>/dev/null
+TMUXBIN={TMUX}
+{ENSURE}
+printf %s '{b64}' | base64 -d > {cmd_f}
+rm -f {done_f} {out_f}
+{TMUX} send-keys -t {SESSION} -l -- 'eval "$(cat {cmd_f})" >{out_f} 2>&1; echo __M5SH_DONE_{nonce}__:$? >{done_f}'
+{TMUX} send-keys -t {SESSION} Enter
+for i in {{1..{wait_iters}}}; do [ -f {done_f} ] && break; sleep 0.5; done
+if [ -f {done_f} ]; then cat {done_f}; echo __M5SH_OUT_{nonce}__; cat {out_f}; rm -f {cmd_f} {out_f} {done_f};
+else echo __M5SH_TIMEOUT_{nonce}__; fi
+"""
+    r = mx(remote, timeout_s + 20)
+    if r.returncode != 0 and not r.stdout:
+        fail(f"mx transport failed (exit {r.returncode}): {r.stderr.strip()}")
+    m = re.search(rf"__M5SH_DONE_{nonce}__:(\d+)\n__M5SH_OUT_{nonce}__\n", r.stdout)
+    if f"__M5SH_TIMEOUT_{nonce}__" in r.stdout:
+        print(f"m5sh: timed out after {timeout_s}s; command may still be "
+              f"running in the pane (see: m5sh read / m5sh key C-c)",
+              file=sys.stderr)
+        sys.exit(124)
+    if not m:
+        fail(f"could not parse remote result: {r.stdout[:400]!r} {r.stderr[:200]!r}")
+    sys.stdout.write(r.stdout[m.end():])
+    if show_exit:
+        print(f"[exit {m.group(1)}]", file=sys.stderr)
+    sys.exit(int(m.group(1)))
+
+
+def cmd_type(argv):
+    enter, parts = False, []
+    for a in argv:
+        if a == "--enter":
+            enter = True
+        else:
+            parts.append(a)
+    if len(parts) != 1:
+        fail("type needs exactly one quoted text argument")
+    nonce = secrets.token_hex(6)
+    b64 = base64.b64encode(parts[0].encode()).decode()
+    txt_f = f"/tmp/m5sh-type-{nonce}.txt"
+    remote = f"""
+{ENSURE}
+printf %s '{b64}' | base64 -d > {txt_f}
+{TMUX} load-buffer -b m5shbuf {txt_f}
+{TMUX} paste-buffer -b m5shbuf -t {SESSION} -d
+rm -f {txt_f}
+{"sleep 0.2; " + TMUX + " send-keys -t " + SESSION + " Enter" if enter else ""}
+echo __M5SH_TYPED__
+"""
+    r = mx(remote)
+    if "__M5SH_TYPED__" not in r.stdout:
+        fail(f"type failed: {r.stdout[:200]!r} {r.stderr[:200]!r}")
+
+
+def cmd_key(argv):
+    if not argv or not all(re.fullmatch(r"[A-Za-z0-9_+\-\.]+", a) for a in argv):
+        fail("key needs tmux key names, e.g. Enter, C-c, Escape, Space")
+    keys = " ".join(argv)
+    remote = f"{ENSURE}\n{TMUX} send-keys -t {SESSION} {keys}\necho __M5SH_KEYED__\n"
+    r = mx(remote)
+    if "__M5SH_KEYED__" not in r.stdout:
+        fail(f"key failed: {r.stdout[:200]!r} {r.stderr[:200]!r}")
+
+
+def cmd_read():
+    remote = (f"if {TMUX} has-session -t {SESSION} 2>/dev/null; then "
+              f"{TMUX} capture-pane -t {SESSION} -p -J -S -300; "
+              f"else echo 'm5sh: no session'; exit 3; fi")
+    r = mx(remote)
+    # Pane is 200 cols wide; tmux pads lines. Trim trailing padding only.
+    sys.stdout.write("\n".join(line.rstrip()
+                               for line in r.stdout.split("\n")))
+    if r.returncode != 0:
+        sys.exit(r.returncode)
+
+
+def cmd_kill():
+    r = mx(f"{TMUX} kill-session -t {SESSION} 2>/dev/null; echo __M5SH_KILLED__")
+    print("m5sh: session killed" if "__M5SH_KILLED__" in r.stdout
+          else "m5sh: kill failed", file=sys.stderr)
+
+
+def cmd_status():
+    r = mx(f"if {TMUX} has-session -t {SESSION} 2>/dev/null; then echo EXISTS; "
+           f"else echo MISSING; fi")
+    print("m5sh: session exists on Mac" if "EXISTS" in r.stdout
+          else "m5sh: no session on Mac")
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    op, rest = sys.argv[1], sys.argv[2:]
+    if op in ("run", "type", "key"):
+        {"run": cmd_run, "type": cmd_type, "key": cmd_key}[op](rest)
+    elif op in ("read", "kill", "status"):
+        {"read": cmd_read, "kill": cmd_kill, "status": cmd_status}[op]()
+    else:
+        fail(f"unknown subcommand {op!r} (see --help)")
+
+
+if __name__ == "__main__":
+    main()

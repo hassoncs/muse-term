@@ -6,6 +6,9 @@ read/write files on that Mac (`files.*`), and you have a shell on your
 This package fixes that, two ways:
 
 - **Flagship: Tailscale + SSH.** Real TTY, streaming, `scp`. ~4 owner acts.
+- **Transport 1b: reverse SSH tunnel via serveo.** Same real SSH, but
+  the Mac dials *out* — use it when the Tailscale route's data plane is
+  dead (Phase C banner gate fails). No account, no Tailscale.
 - **Fallback: file-drop daemon.** Zero accounts, one paste; poll latency,
   streaming + emulated PTY. If SSH setup fails at any gate, land here so
   the owner is never left with nothing.
@@ -98,6 +101,105 @@ access: you write your public key onto the Mac directly.
 *Gate: both succeed. Now tell the owner plainly: you have a real shell
 on their Mac. Otherwise: Failure ladder.*
 
+## Transport 1b — reverse SSH tunnel via serveo (use when the Tailscale banner gate fails)
+
+**When:** your Phase C banner fetch through the port-3130 proxy closes
+with no bytes (in our fleet's case: ~8s, zero bytes back, for *every*
+tailnet peer). That is the agent-VM platform's Tailscale data plane
+being dead — not a Mac fault and not fixable from either machine.
+Don't keep retrying it. Reverse direction instead: **the Mac dials
+out** to a public tunnel service and your SSH rides back in through
+that outbound connection. (Proven end-to-end 2026-10-25 on the fleet's
+own Mac, after the Tailscale route failed exactly this way.)
+
+### Mac side — a launchd tunnel agent
+
+The Mac runs one outbound command, kept alive by launchd
+(`mac/revtunnel.plist` in this repo, label `io.museterm.revtunnel`):
+
+```sh
+/usr/bin/ssh -o ControlMaster=no -o ControlPath=none \
+  -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -N -R 0:localhost:22 serveo.net
+```
+
+It forwards a serveo-assigned public port back to the Mac's own sshd
+(so Phase A2 — Remote Login ON — is still required). Output goes to
+`/tmp/revtunnel.log`, which prints lines like
+`Allocated port 28420 for remote forward to localhost:22`.
+
+**Getting it started when you only have file commands — the one
+wrinkle, stated plainly:** you can *place* the tunnel but not *launch*
+it. `files.write` the plist to
+`~/Library/LaunchAgents/io.museterm.revtunnel.plist` on the Mac and it
+loads automatically at the owner's **next login** (RunAtLoad). For an
+immediate start you need one bootstrap: if the file-drop daemon (below)
+is already installed, run
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.museterm.revtunnel.plist`
+as a job; otherwise the owner runs `mac/revtunnel-install.sh` once from
+a clone (a Terminal paste, like the file-drop install). Either way it
+is a one-time bootstrap — after that, launchd keeps the tunnel up with
+zero further acts.
+
+### Your side — connect
+
+Same keypair and `authorized_keys` line as Phase C; nothing new to set
+up on the Mac's sshd.
+
+1. **Read the current port — every time.** The port rotates (below).
+   `files.read` `/tmp/revtunnel.log` on the Mac and take the **last**
+   `Allocated port NNNN` line.
+2. Connect (note: the proxy here is your normal **web** proxy,
+   port **3128** — the public internet route, *not* 3130):
+   ```sh
+   ssh -p <port> -i ~/.ssh/id_ed25519 \
+     -o 'ProxyCommand=socat - PROXY:<web-proxy-host>:%h:%p,proxyport=3128' \
+     <owner>@serveousercontent.com 'hostname; whoami'
+   ```
+   `<web-proxy-host>` = host from your `HTTPS_PROXY`, as in Phase C.
+   `scp` works the same way (`scp -P <port>` + same ProxyCommand).
+   The `sim/m5-ssh` wrapper in this repo automates the port lookup for
+   the fleet's own setup; copy the pattern.
+
+*Gate: same proof as Phase C — the Mac's real hostname + owner
+username. Then Phase D applies, adding `-p <port>` and the
+ProxyCommand to each command.*
+
+### Caveats (all measured on the anonymous tier, 2026-10-25)
+
+- **Port rotates on every reconnect.** Never cache it; re-read the log.
+- **One forward per source** — one outbound tunnel connection per Mac.
+- **Sessions expire:** ~10-minute expiry plus a ~2-minute idle close.
+  launchd `KeepAlive` respawns the tunnel (with a *new* port), which
+  masks the expiry — but a long SSH session can still drop mid-work;
+  reconnect with the fresh port.
+- **Throughput cap ~256 KiB/s.** Fine for shells and source trees;
+  bulk copies will crawl — prefer the Tailscale route for those when
+  it works.
+- **PTY — proven, with a key caveat.** The serveo gateway itself
+  allocates a TTY fine: `ssh -tt` with an ordinary key returned a real
+  `/dev/ttysNNN` (tested 2026-10-25). **But** if your pubkey's line in
+  `authorized_keys` is prefixed `restrict,…` (which includes
+  `no-pty`), `ssh -tt` fails with *"PTY allocation request failed on
+  channel 0"* — the key line, not serveo. Fixes: remove the `restrict`
+  prefix from your key's line (an owner-visible change to their
+  `authorized_keys` — do it openly), or work around it per-command with
+  `script -q /dev/null <cmd>`, which allocates a PTY on the Mac side
+  without an SSH PTY.
+- **The forwarded port is public.** Anyone on the internet can reach
+  the Mac's sshd login prompt at `serveousercontent.com:<port>` while
+  the tunnel is up. Your protection is SSH key auth itself (the same
+  `authorized_keys` from Phase C) — the random port is obscurity, not
+  security. Remove the tunnel with `mac/revtunnel-uninstall.sh` when
+  it's not wanted.
+- **Alternatives, one line each:** pinggy (`ssh -R0:localhost:22
+  tcp@a.pinggy.io`) connected faster in our tests but free sessions
+  expire after ~60 minutes; localhost.run's free tier does not offer
+  raw TCP/SSH forwarding (not viable); ngrok (`ngrok tcp 22`) works
+  but needs the owner's own ngrok account and authtoken on the Mac.
+
+---
+
 ## Phase D — daily use: plain SSH
 
 Everything is ordinary `ssh` / `scp` from your VM. Examples:
@@ -126,6 +228,10 @@ session open waiting on a dev server.
    Check this **first** whenever the Mac-side checks pass.
 2. **Proxy/connect timeout** → your VM's tailnet join still pending?
    `/opt/hatch/bin/tailscale status`; re-show the approval link (Phase B).
+   If the join is complete but the banner fetch through the proxy
+   still closes empty (~8s, every peer), the data plane itself is
+   dead — go to **Transport 1b** (reverse tunnel via serveo) instead
+   of retrying.
 3. **Connection reaches the Mac but port 22 refuses/closes** → Remote
    Login is off. Back to Phase A2.
 4. **`Permission denied (publickey)`** → check `authorized_keys` content
@@ -135,9 +241,10 @@ session open waiting on a dev server.
    then retry.
 5. **Host-key / changed-key warnings** → stop; show the owner, don't
    delete `known_hosts` entries silently.
-6. **Still stuck → install the file-drop fallback below.** The owner is
-   never left with nothing, and file-drop needs no network at all. SSH
-   can be revisited later; both can coexist.
+6. **Still stuck → Transport 1b if you haven't tried it, then the
+   file-drop fallback below.** The owner is never left with nothing,
+   and file-drop needs no network at all. SSH can be revisited later;
+   all three can coexist.
 
 ---
 

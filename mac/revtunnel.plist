@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  muse-term Transport 1b — reverse SSH tunnel via serveo.net.
+  The Mac dials OUT to serveo, which forwards a public port back to the
+  Mac's own sshd (localhost:22). No inbound connection to the Mac, no
+  account, no Tailscale. Install:
+
+    cp mac/revtunnel.plist ~/Library/LaunchAgents/io.museterm.revtunnel.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.museterm.revtunnel.plist
+
+  Remove:
+
+    launchctl bootout gui/$(id -u)/io.museterm.revtunnel
+    rm ~/Library/LaunchAgents/io.museterm.revtunnel.plist
+
+  The current public port is printed in /tmp/revtunnel.log
+  ("Allocated port NNNN for remote forward to localhost:22") and ROTATES
+  on every reconnect — always read it fresh. See AGENT.md, "Transport 1b".
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.museterm.revtunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ssh</string>
+    <string>-o</string><string>ControlMaster=no</string>
+    <string>-o</string><string>ControlPath=none</string>
+    <string>-o</string><string>StrictHostKeyChecking=accept-new</string>
+    <string>-o</string><string>ExitOnForwardFailure=yes</string>
+    <string>-o</string><string>ServerAliveInterval=15</string>
+    <string>-o</string><string>ServerAliveCountMax=3</string>
+    <string>-N</string>
+    <string>-R</string><string>0:localhost:22</string>
+    <string>serveo.net</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/revtunnel.log</string>
+  <key>StandardErrorPath</key><string>/tmp/revtunnel.log</string>
+</dict>
+</plist>

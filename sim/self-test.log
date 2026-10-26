@@ -1,0 +1,80 @@
+=== kill (clean slate) ===
+m5sh: session killed
+exit=0
+=== T1a run cd+export ===
+exit=0
+=== T1b run pwd; echo $X (separate call) ===
+/tmp
+42
+exit=0
+=== T3 tty ===
+/dev/ttys026
+ttys026 
+exit=0
+=== T2a type bc --enter ===
+exit=0
+=== T2b type 6*7 --enter ===
+exit=0
+=== T2c read (tail) ===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=== T2d type quit --enter (exit bc) ===
+exit=0
+=== T4 latency: time run echo ===
+latency-probe
+
+real	0m1.457s
+user	0m0.104s
+sys	0m0.021s
+exit=0
+=== status ===
+m5sh: session exists on Mac
+=== T2-evidence: read | grep non-blank (after bc 6*7, quit) ===
+➜  ~  PS1='__M5SH__%# '                                                                                                                                                  󱙺 FORGE  grok/grok-4.5 MEDIUM
+__M5SH__% eval "$(cat /tmp/m5sh-f1f2ba39fa55.cmd)" >/tmp/m5sh-f1f2ba39fa55.out 2>&1; echo __M5SH_DONE_f1f2ba39fa55__:$? >/tmp/m5sh-f1f2ba39fa55.done                     󱙺 FORGE  grok/grok-4.5 MEDIUM
+__M5SH__% eval "$(cat /tmp/m5sh-77733fe559bd.cmd)" >/tmp/m5sh-77733fe559bd.out 2>&1; echo __M5SH_DONE_77733fe559bd__:$? >/tmp/m5sh-77733fe559bd.done                     󱙺 FORGE  grok/grok-4.5 MEDIUM
+__M5SH__% eval "$(cat /tmp/m5sh-ace961b0551c.cmd)" >/tmp/m5sh-ace961b0551c.out 2>&1; echo __M5SH_DONE_ace961b0551c__:$? >/tmp/m5sh-ace961b0551c.done                     󱙺 FORGE  grok/grok-4.5 MEDIUM
+__M5SH__% bc                                                                                                                                                             󱙺 FORGE  grok/grok-4.5 MEDIUM
+>>> 6*7
+42
+>>> quit
+__M5SH__% eval "$(cat /tmp/m5sh-c18220d13233.cmd)" >/tmp/m5sh-c18220d13233.out 2>&1; echo __M5SH_DONE_c18220d13233__:$? >/tmp/m5sh-c18220d13233.done                     󱙺 FORGE  grok/grok-4.5 MEDIUM
+__M5SH__%                                                                                                                                                                󱙺 FORGE  grok/grok-4.5 MEDIUM
+=== T2-redo: type python3 --enter; type 6*7 via bc already exited; fresh bc ===
+exit=0
+exit=0
+=== read non-blank tail ===
+>>> 6*7
+42
+>>> quit
+__M5SH__% eval "$(cat /tmp/m5sh-c18220d13233.cmd)" >/tmp/m5sh-c18220d13233.out 2>&1; echo __M5SH_DONE_c18220d13233__:$? >/tmp/m5sh-c18220d13233.done                     󱙺 FORGE  grok/grok-4.5 MEDIUM
+__M5SH__% bc                                                                                                                                                             󱙺 FORGE  grok/grok-4.5 MEDIUM
+>>> 123*456
+56088
+>>>
+exit=0
+=== latency samples x3 ===
+/bin/bash: line 12: /usr/bin/time: No such file or directory
+/bin/bash: line 12: /usr/bin/time: No such file or directory
+/bin/bash: line 12: /usr/bin/time: No such file or directory
+sample1: probe elapsed_ms=1558
+sample2: probe elapsed_ms=1381
+sample3: probe elapsed_ms=1384

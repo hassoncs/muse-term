@@ -10,8 +10,16 @@ agent once you're done:
 | Transport | You get | Costs | Owner acts |
 |---|---|---|---|
 | **Tailscale + SSH** ⭐ recommended | Real TTY, live streaming, `scp`, Apple's own sshd, WireGuard encryption | A free Tailscale account | 4, all one-time: install Tailscale + sign in, turn on Remote Login, switch Muse's ssh permission from Deny to Ask, approve your agent's VM into your tailnet |
+| **Reverse tunnel via serveo** (Transport 1b) ⭐ when the tailnet data plane fails | Real SSH, TTY, `scp` — the Mac dials *out*, your SSH rides back in | No account; forwarded port is public, ~256 KiB/s cap, port rotates per reconnect | 2: Remote Login on + one launchd bootstrap (your agent can place the plist with its file access; it loads at your next login, or immediately via one paste) |
+| Reverse tunnel via pinggy | Same idea as serveo, connected faster in our tests | Free sessions expire after ~60 minutes | Same as serveo |
 | **File-drop daemon** (in this repo) | Shell via job files — streaming progress + PTY sessions included | No accounts, no network at all | 1: paste one install line |
-| Hosted relay / ngrok-style tunnel | — | *Not shipped:* extra account + a third party to trust, rotating URLs | — |
+| Hosted relay / ngrok-style tunnel | — | *Not shipped as the answer:* ngrok works but needs your own account + authtoken on the Mac; a hosted relay adds a third party to trust | — |
+
+Plus a **simulated floor** in [`sim/`](sim/): `m5sh`, an ssh-*like*
+persistent shell (tmux-backed, over a file/relay exec channel) that
+shows how low the floor goes when no real SSH path exists at all, and
+`m5-ssh`, the port-lookup wrapper for the serveo tunnel. Reference
+implementations from the fleet that proved all of the above.
 
 **Point your agent at [`AGENT.md`](AGENT.md)** — it's a guided setup
 written for the agent, with a verification gate per phase and a failure
@@ -96,11 +104,13 @@ connect*:
 File-drop is the zero-setup **default**, not the architecture. The
 job/result/status protocol is transport-agnostic: a job is JSON, a
 result is JSON, status and partial output are files today and messages
-tomorrow. A **socket-push transport** — the Mac daemon dialling *out*
-over a websocket to a relay the owner chooses, or over Tailscale — is
-the documented upgrade path for lower latency. It is an interface note
-in v1, deliberately not built: file-drop and SSH already cover the
-zero-setup and full-power ends.
+tomorrow. The Mac-dials-*out* idea has since shipped in its simplest
+form — not a websocket daemon but a plain reverse SSH tunnel
+(Transport 1b, serveo/pinggy): outbound-only, no account, and the far
+end is the owner's real sshd. A websocket relay transport remains a
+documented option for lower latency, deliberately not built: SSH,
+the reverse tunnel, and file-drop already cover the full-power,
+dead-network, and zero-setup cases.
 
 ## Security model — read this
 
@@ -112,6 +122,11 @@ agent to have that.
   `~/.ssh/authorized_keys` alongside any keys you already trust;
   removing that one line revokes it instantly. Traffic is encrypted
   end-to-end by WireGuard + SSH; Tailscale sees no command content.
+- **Reverse tunnel (1b):** while the tunnel is up, the Mac's sshd
+  login prompt is reachable from the public internet at the tunnel
+  host's assigned port. Key auth is the protection (same
+  `authorized_keys`); the random port is not a secret. Uninstall the
+  tunnel when it isn't wanted.
 - **File-drop:** the only trigger is a job file in
   `~/muse-term/bridge/` carrying the token from `~/muse-term/token`
   (mode `0600`, generated at install). Wrong token = never runs. There
@@ -140,6 +155,8 @@ agent to have that.
 | `agent/SKILL.md` | Short-form protocol for skill-based agents. |
 | `mac/runner.py` | File-drop daemon: streaming, live status, PTY sessions. Stdlib only. |
 | `mac/install.sh` / `mac/uninstall.sh` | Idempotent install/remove; launchd label `io.museterm.runner`, home `~/muse-term/`. |
+| `mac/revtunnel.plist` + `revtunnel-install.sh` / `revtunnel-uninstall.sh` | Transport 1b: launchd reverse SSH tunnel via serveo, label `io.museterm.revtunnel`, log `/tmp/revtunnel.log`. |
+| `sim/m5-ssh` / `sim/m5sh` | Simulated floor: serveo port-lookup SSH wrapper, and a tmux-backed ssh-like shell over an exec channel. |
 | `client/client.py` | Optional tiny client for an agent running *on* the Mac. |
 | `tests/test_local.py` | Local simulation incl. streaming + PTY tests (macOS/Linux). |
 

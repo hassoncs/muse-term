@@ -1,0 +1,37 @@
+#!/bin/sh
+# m5-ssh — real SSH to Chris's M5 Mac via the serveo reverse tunnel.
+#
+# Mac side (already installed, launchd KeepAlive):
+#   user agent io.museterm.revtunnel.test runs
+#   /usr/bin/ssh -N -R 0:localhost:22 serveo.net
+#   Serveo anonymous tier assigns a RANDOM port per (re)connect and the
+#   tunnel expires after ~10 min / 2 min idle — launchd respawns it, so
+#   the port ROTATES. This wrapper reads the current port from the Mac
+#   log (via the MuseExec channel) on every invocation.
+#
+# Usage:
+#   m5-ssh                     interactive shell (PTY via `script` is NOT
+#                              automatic; serveo gateway refuses ssh -tt.
+#                              For a PTY command: m5-ssh 'script -q /dev/null <cmd>')
+#   m5-ssh '<cmd>'             run a command on the Mac
+#   m5-ssh --scp <local> <remote-path>   scp upload (same tunnel)
+#
+# Requirements: mx.py (MuseExec v2) reachable, socat on the VM.
+set -eu
+MAC_USER=hassoncs
+TUNNEL_HOST=serveousercontent.com
+KEY=/home/hatch/.ssh/id_ed25519
+PROXYCMD='socat - PROXY:hatch-egress-proxy:%h:%p,proxyport=3128'
+
+PORT=$(timeout 120 python3 "$HOME/workspace/mac-exec/v2/mx.py" run \
+  'grep "Allocated port" /tmp/revtunnel-launchd.log | tail -1' \
+  | sed -n 's/.*Allocated port \([0-9][0-9]*\).*/\1/p' | tail -1)
+[ -n "$PORT" ] || { echo "m5-ssh: could not read serveo port from Mac log" >&2; exit 1; }
+
+if [ "${1:-}" = "--scp" ]; then
+  shift
+  exec scp -P "$PORT" -i "$KEY" -o "ProxyCommand=$PROXYCMD" \
+    -o StrictHostKeyChecking=accept-new "$1" "$MAC_USER@$TUNNEL_HOST:$2"
+fi
+exec ssh -p "$PORT" -i "$KEY" -o "ProxyCommand=$PROXYCMD" \
+  -o StrictHostKeyChecking=accept-new "$MAC_USER@$TUNNEL_HOST" "$@"
