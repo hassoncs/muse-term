@@ -64,11 +64,10 @@ which is exactly what it doesn't have. You do one thing, once, in
 Terminal on your Mac:
 
 ```sh
-git clone https://github.com/YOUR-ORG/muse-term.git && cd muse-term && ./mac/install.sh
+git clone https://github.com/hassoncs/muse-term.git && cd muse-term && ./mac/install.sh
 ```
 
-(Repo URL is a placeholder until the project is published under its
-final name/home.) The installer prints one line to give back to your
+The installer prints one line to give back to your
 agent; from then on the agent drives everything. Missing `python3`?
 The installer tells you to run `xcode-select --install` first.
 

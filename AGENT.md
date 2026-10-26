@@ -258,11 +258,10 @@ Installing takes a shell — the thing you're missing. Ask the owner to
 paste **one line** in Terminal on the Mac:
 
 ```sh
-git clone https://github.com/YOUR-ORG/muse-term.git && cd muse-term && ./mac/install.sh
+git clone https://github.com/hassoncs/muse-term.git && cd muse-term && ./mac/install.sh
 ```
 
-(URL is a placeholder until the project is published; use the repo URL
-you were pointed at.) The installer prints a confirmation line for the
+The installer prints a confirmation line for the
 owner to paste back to you. If it reports `python3 not found`, the owner
 runs `xcode-select --install`, clicks Install, then re-runs the line.
 

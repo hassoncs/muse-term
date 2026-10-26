@@ -27,7 +27,7 @@ description: Get a shell on the owner's Mac. Flagship: Tailscale + SSH (agent-gu
 
 ## Fallback: file-drop (zero accounts)
 Owner pastes once in Mac Terminal:
-`git clone <this-repo-url> && cd muse-term && ./mac/install.sh`
+`git clone https://github.com/hassoncs/muse-term.git && cd muse-term && ./mac/install.sh`
 You cannot install it — no shell yet. Then:
 1. `files.read` `~/muse-term/token` once per session. Never print it.
 2. Job: `files.write` `bridge/job-<id>.tmp` with
